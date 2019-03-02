@@ -1,8 +1,9 @@
 package org.academiadecodigo.asciimos.chatserver.server;
 
+import org.academiadecodigo.asciimos.chatserver.server.commands.Commands;
+
 import java.io.*;
 import java.net.Socket;
-import java.net.SocketException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
@@ -23,85 +24,74 @@ public class ClientHandler implements Runnable {
         synchronized (clients) {
             clients.add(this);
         }
+
         name = "Client " + clients.size();
     }
 
     private void answerClient() throws IOException {
+        BufferedReader input = new BufferedReader(new InputStreamReader(clientSocket.getInputStream()));
 
         System.out.println("Client has connected from: " + clientSocket.getRemoteSocketAddress());
         cachedPool.submit(new ServerBroadcaster("Client has connected: " + name + "\n"));
-        BufferedReader input = new BufferedReader(new InputStreamReader(clientSocket.getInputStream()));
 
         listener(input);
     }
 
     private void listener(BufferedReader input) throws IOException {
-        String line = "";
-        while ((line = input.readLine()) != null) {
-            if (line.equals("")) {
-                send("[SERVER] Cannot send empty message!\n");
+        String data = "";
+        while ((data = input.readLine()) != null) {
+
+            if (isInvalid(data) || isCommand(data)) {
                 continue;
             }
 
-            // command
-            if (line.charAt(0) == '/') {
-                StringBuilder string = new StringBuilder(line);
-                string.deleteCharAt(0);
-
-                if (string.length() == 0) {
-                    send("[SERVER] Command not found! EG: /help\n");
-                    continue;
-                }
-
-                String[] args = string.toString().split(" ");
-                // commands with no arguments
-                if (args[0].equals("help")) {
-                    send("----- Command Helper -----\n" +
-                            "1. /setname <name>\n" +
-                            "2. /quit <reason>\n" +
-                            "--------------------\n");
-                }
-
-                // commands with arguments only
-                if (args.length <= 1) {
-                    send("[SERVER] You have to specify the argument!\n");
-                    continue;
-                }
-
-                if (args[0].equals("setname")) {
-                    send("[SERVER] You have changed your name succesfully to " + args[1] + "!\n");
-                    this.name = args[1];
-                }
-
-                if (args[0].equals("quit")) {
-                    send("[SERVER] Byeeee " + name + "!\n");
-                    synchronized (clients) {
-                        clientSocket.close();
-                        clients.remove(this);
-                    }
-                    cachedPool.submit(new ServerBroadcaster(name + " has disconnected: " + args[1] + "\n"));
-                    return;
-                }
-                continue;
-            }
-            cachedPool.submit(new ServerBroadcaster("[" + name + "] " + line + "\n"));
+            cachedPool.submit(new ServerBroadcaster("[" + name + "] " + data + "\n"));
         }
     }
 
-    private void send(String data) {
+    private boolean isCommand(String data) throws IOException {
+        if (data.charAt(0) == '/') {
+            StringBuilder builder = new StringBuilder(data);
+            String commandString = builder.deleteCharAt(0).toString();
+
+            Commands command = Commands.isCommand(commandString, this);
+
+            if (command != null) {
+                System.out.println("Executing command: /" + commandString);
+                command.execute(this, commandString);
+            }
+            return true;
+        }
+        return false;
+    }
+
+    private boolean isInvalid(String data) {
+        if (data.equals("")) {
+            sendMessage("[SERVER] Cannot send empty message!\n");
+            return true;
+        }
+        return false;
+    }
+
+    public void sendMessage(String data) {
         try {
             BufferedWriter writer = new BufferedWriter(new OutputStreamWriter(clientSocket.getOutputStream()));
-            writer.write(data);
+            writer.write(data + "\n");
             writer.flush();
-        } catch (SocketException e) {
-            System.out.println("Client " + name + " is not answering, removing it from the list.");
-            synchronized (clients) {
-                clients.remove(this);
-            }
+        } catch (Exception e) {
+            clients.remove(this);
+        }
+    }
+
+    public void setName(String name) {
+        this.name = name;
+    }
+
+    public void closeSocket() {
+        try {
+            clientSocket.close();
         } catch (IOException e) {
-            synchronized (clients) {
-                clients.remove(this);
-            }
+            e.printStackTrace();
         }
     }
 
@@ -126,7 +116,7 @@ public class ClientHandler implements Runnable {
             synchronized (clients) {
                 System.out.println("Broadcasting message: " + data.replace("\n", ""));
                 for (ClientHandler c : clients) {
-                    c.send(data);
+                    c.sendMessage(data);
                 }
             }
         }
